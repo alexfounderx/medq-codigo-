@@ -1,10 +1,34 @@
 // app/api/games/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getApps, initializeApp } from "firebase-admin/app";
+import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 
-if (!getApps().length) initializeApp();
+// ✅ Init Firebase Admin de forma segura (env vars o ADC)
+if (!getApps().length) {
+  const hasSA =
+    process.env.FIREBASE_PROJECT_ID &&
+    process.env.FIREBASE_CLIENT_EMAIL &&
+    process.env.FIREBASE_PRIVATE_KEY;
+
+  if (hasSA) {
+    initializeApp({
+      credential: cert({
+        projectId: process.env.FIREBASE_PROJECT_ID!,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY!.replace(/\\n/g, "\n"),
+      }),
+    });
+  } else {
+    // Alternativa: Application Default Credentials si usas GOOGLE_APPLICATION_CREDENTIALS
+    initializeApp({
+      credential: applicationDefault(),
+      projectId:
+        process.env.FIREBASE_PROJECT_ID ||
+        process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    });
+  }
+}
 
 const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,12 +44,13 @@ function calcEloDelta(oldElo: number, score: number, opponentElo = 1500, K = 32)
 
 export async function POST(req: NextRequest) {
   try {
-    // 1) Auth
+    // 1) Auth (Firebase ID token)
     const authz = req.headers.get("authorization") || "";
     const token = authz.startsWith("Bearer ") ? authz.slice(7) : undefined;
     if (!token) return NextResponse.json({ error: "missing_id_token" }, { status: 401 });
+
     const decoded = await getAuth().verifyIdToken(token);
-    const uid = decoded.uid;               // Firebase UID (texto)
+    const uid = decoded.uid;               // Firebase UID (TEXT)
     const email = decoded.email || null;
 
     // 2) Body
@@ -38,18 +63,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "invalid_score" }, { status: 400 });
     }
 
-    // 3) Encontrar (o crear) el usuario en DB y decidir el userId a usar
+    // 3) Encontrar (o crear) el usuario en DB y decidir userId a usar
     let userId = uid;
 
-    // Intenta por id = uid
+    // Por id = uid
     let { data: userRow, error: userErr } = await supa
       .from("users")
       .select("id, elo, elo_by_specialty, email")
       .eq("id", uid)
       .maybeSingle();
 
+    if (userErr) return NextResponse.json({ error: userErr.message }, { status: 500 });
+
     if (!userRow && email) {
-      // Intenta por email si la fila no existe con id=uid
+      // Por email (si no existe id=uid)
       const { data: byEmail, error: emailErr } = await supa
         .from("users")
         .select("id, elo, elo_by_specialty, email")
@@ -69,7 +96,7 @@ export async function POST(req: NextRequest) {
       const { error: insUserErr } = await supa.from("users").insert({ id: uid, email, elo: 1200 });
       if (insUserErr) return NextResponse.json({ error: insUserErr.message }, { status: 500 });
 
-      // vuelve a leer
+      // Releer
       const reread = await supa
         .from("users")
         .select("id, elo, elo_by_specialty, email")
@@ -88,14 +115,14 @@ export async function POST(req: NextRequest) {
       (typeof userRow.elo === "number" ? userRow.elo : undefined) ??
       1200;
 
-    // 4) Cálculo
+    // 4) Cálculo ELO
     const score = correct / total;
     const delta = calcEloDelta(currentElo, score, opponent_elo ?? 1500);
     const newElo = currentElo + delta;
 
     // 5) Guardar partida
     const { error: insGameErr } = await supa.from("game_sessions").insert({
-      user_id: userId, // usa el id que SÍ existe en users
+      user_id: userId,
       specialty,
       correct,
       total,
@@ -123,7 +150,7 @@ export async function POST(req: NextRequest) {
       .eq("id", userId);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
 
-    // 8) Releer lo persistido
+    // 8) Releer lo persistido (sanity check)
     const { data: userAfter, error: readAfterErr } = await supa
       .from("users")
       .select("elo, elo_by_specialty")
@@ -145,7 +172,7 @@ export async function POST(req: NextRequest) {
       elo_after: newElo,
       elo_delta: delta,
       persisted_elo_after: persistedAfter,
-      user_id_used: userId, // para que veas cuál se usó realmente
+      user_id_used: userId,
     });
   } catch (e: any) {
     const msg = typeof e?.message === "string" ? e.message : "unexpected_error";
