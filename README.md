@@ -41,5 +41,7 @@ ____
 
 
 git add .
+
 git commit -m "Avance del día X"
+
 git push
