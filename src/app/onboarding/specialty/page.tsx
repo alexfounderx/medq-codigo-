@@ -28,9 +28,22 @@ export default function SelectSpecialty() {
   const save = async () => {
     if (!selected) return;
     const u = auth.currentUser!;
-    await supabase.from("users").update({ specialty: selected }).eq("id", u.uid);
-    router.replace("/dashboard");
+    // Intenta guardar la especialidad del usuario logueado
+    const { error } = await supabase
+      .from("users")
+      .update({ specialty: selected })
+      .eq("id", u.uid);
+  
+    if (error) {
+      // No navegues si no se guardó: muestra el error y qué hacer
+      alert(`No se pudo guardar la especialidad.\n\nDetalles: ${error.message}\n\nSi te sigue pasando, revisa en Supabase la política RLS de la tabla "users" para permitir update cuando auth.uid() = id.`);
+      return;
+    }
+  
+    // ✅ Guardado correcto: ahora sí navega a SoloQ (o a dashboard si prefieres)
+    router.replace("/soloQ");
   };
+  
 
   if (loading) return <p>Cargando…</p>;
 

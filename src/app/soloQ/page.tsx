@@ -148,15 +148,27 @@ export default function SoloQPage() {
         const j = await r.json()
         if (!r.ok) throw new Error(j.error || 'Error al cerrar partida')
 
-        // Si tu /api/games devuelve { old_elo, new_elo, delta }
+
+      
+        console.log('[SoloQ -> Resultados]', {
+          delta: j.delta ?? j.elo_delta,
+          new_elo: j.new_elo ?? j.elo_after,
+          correct: finalCorrects,
+          total: qs.length,
+          specialty,
+        });
+        
+        // Construir query con los datos que vienen del backend + tus cálculos
         const q = new URLSearchParams({
           eloDelta: String(j.delta ?? j.elo_delta ?? 0),
           eloAfter: String(j.new_elo ?? j.elo_after ?? ''),
           correct: String(finalCorrects),
           total: String(qs.length),
           specialty,
-        })
-        router.push(`/resultados?${q.toString()}`)
+        });
+        // Redirigir a la página de resultados
+        router.push(`/resultados?${q.toString()}`);
+
       } catch (e: any) {
         console.error(e)
         setErrMsg(e?.message || 'Error al cerrar partida')
